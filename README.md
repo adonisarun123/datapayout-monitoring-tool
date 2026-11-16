@@ -128,8 +128,9 @@ The questions in SRS section 17 remain open for the product owner. None is answe
 
 ## Limitations (not implemented, or not verified)
 
-- **No MFA and no SSO.** The SRS asks for MFA for admins before production "where available". It is not available here. Put the app behind an SSO or identity-aware proxy, or add MFA, before production use.
-- **No email.** Invite and reset links are shown once to the admin, who passes them on.
+- **MFA comes from Google sign-in, when configured.** Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (see `.env.example`) and people sign in with Google. The app then checks the signed Google ID token, a verified email, the Workspace domain (`hd` claim, with `ALLOWED_EMAIL_DOMAINS`) and that an admin has added the account. Two-step verification is whatever the Google Workspace enforces. Without Google configured there is only email and password, with no MFA.
+- **Re-confirmation before approval, with Google, is a fresh Google round trip.** It proves the Google session is still live; it does not force the password to be retyped.
+- **No email.** In password mode, invite and reset links are shown once to the admin, who passes them on. With Google sign-in there are no links.
 - **Rate limiting is per server instance** (in memory), plus a database-backed lockout after 5 failed sign-ins per email in 15 minutes. On multi-instance or serverless hosting, add a shared limiter at the edge.
 - **Append-only is enforced by triggers**, which also bind the database owner in normal use, but an owner can drop a trigger. For stricter separation, run the app with a role that does not own the tables.
 - **PDF text is Latin-1 only.** Names in other scripts print as `?` in the PDF; the on-screen bill and the CSV are unaffected.

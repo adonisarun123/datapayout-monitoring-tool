@@ -14,7 +14,8 @@ async function main() {
   if (existing.n > 0 && !process.argv.includes("--force"))
     throw new Error("An active admin already exists. Invite further admins from Admin > Users, or pass --force to add another from the command line.");
   const { inviteUrl } = await createUser(null, { email, name, role: "ADMIN" });
-  console.log(`\nAdmin created for ${email}.\nOpen this single-use link within 72 hours to set the password:\n\n  ${inviteUrl}\n`);
+  if (inviteUrl) console.log(`\nAdmin created for ${email}.\nOpen this single-use link within 72 hours to set the password:\n\n  ${inviteUrl}\n`);
+  else console.log(`\nAdmin created for ${email}. Google sign-in is configured, so they sign in with Google; no link is needed.\n`);
 }
 
 main().catch((e) => { console.error(e.message ?? e); process.exitCode = 1; }).finally(closePool);

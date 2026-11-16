@@ -52,7 +52,7 @@ export function useAction(opts: { onDone?: (data: any) => void; refresh?: boolea
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [confirm, setConfirm] = useState<{ error: ApiError; retry: () => void } | null>(null);
-  const [reauth, setReauth] = useState<{ retry: () => void } | null>(null);
+  const [reauth, setReauth] = useState<{ method: string; retry: () => void } | null>(null);
 
   async function run(method: string, path: string, body: any = {}) {
     if (!key.current) key.current = crypto.randomUUID();
@@ -69,7 +69,7 @@ export function useAction(opts: { onDone?: (data: any) => void; refresh?: boolea
     if (res.status !== 0) key.current = ""; // a completed, failed attempt frees the key; a network failure keeps it for a safe retry
     const patch = CONFIRMABLE[res.error.code];
     if (patch) setConfirm({ error: res.error, retry: () => run(method, path, patch(body, res.error)) });
-    else if (res.error.code === "REAUTH_REQUIRED") setReauth({ retry: () => run(method, path, body) });
+    else if (res.error.code === "REAUTH_REQUIRED") setReauth({ method: res.error.details?.method ?? "password", retry: () => run(method, path, body) });
     else setError(res.error);
     return null;
   }
@@ -89,7 +89,15 @@ export function useAction(opts: { onDone?: (data: any) => void; refresh?: boolea
           </div>
         </div>
       ) : null}
-      {reauth ? <Reauth onDone={() => { const r = reauth.retry; setReauth(null); r(); }} onCancel={() => setReauth(null)} /> : null}
+      {reauth?.method === "google" ? (
+        <div className="alert info" role="alertdialog" aria-label="Confirm with Google">
+          <p>This action cannot be undone. Confirm it is you with Google, then press the button again.</p>
+          <div className="actions">
+            <a className="btn primary" href={`/api/v1/auth/google/start?next=${encodeURIComponent(typeof window === "undefined" ? "/" : window.location.pathname)}`}>Confirm with Google</a>
+            <button type="button" onClick={() => setReauth(null)}>Cancel</button>
+          </div>
+        </div>
+      ) : reauth ? <Reauth onDone={() => { const r = reauth.retry; setReauth(null); r(); }} onCancel={() => setReauth(null)} /> : null}
     </>
   );
   return { run, pending, ui, error, clear: () => { setError(null); setConfirm(null); } };

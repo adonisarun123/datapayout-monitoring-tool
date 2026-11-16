@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { db, one, q, tx, type Db } from "@/lib/db";
 import { AppError, conflict, forbidden, invalid, notFound, unauthenticated } from "@/lib/errors";
 import { audit, type Actor } from "./audit";
+import { googleEnabled, passwordLoginEnabled, type GoogleIdentity } from "./google";
 
 const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, len: number, opts: crypto.ScryptOptions) => Promise<Buffer>;
 
@@ -63,6 +64,7 @@ export async function login(
   password: string,
   meta: { ip?: string | null; userAgent?: string | null; requestId?: string },
 ): Promise<{ token: string; user: Actor }> {
+  if (!passwordLoginEnabled()) throw forbidden("PASSWORD_LOGIN_DISABLED", "Password sign-in is switched off. Use Sign in with Google.");
   const normalized = normalizeEmail(email ?? "");
   const failed = await one<{ n: string }>(
     db,
@@ -91,6 +93,34 @@ export async function login(
     [user.id, sha256(token), meta.ip ?? null, meta.userAgent ?? null],
   );
   await audit(db, { id: user.id, requestId: meta.requestId }, "LOGIN", "user", user.id);
+  return { token, user: toActor(user, session, meta.requestId) };
+}
+
+/**
+ * Signs in a person Google has already verified. There is no self sign-up: an admin must have added the
+ * account first, and it must be active. No password or invite link is involved.
+ */
+export async function loginWithGoogle(
+  identity: GoogleIdentity,
+  meta: { ip?: string | null; userAgent?: string | null; requestId?: string },
+): Promise<{ token: string; user: Actor }> {
+  const normalized = normalizeEmail(identity.email);
+  const user = await one(db, "select * from users where email_normalized = $1", [normalized]);
+  const ok = !!user && user.active === true && emailDomainAllowed(normalized);
+  await db.query("insert into login_attempts (email_normalized, ip, succeeded) values ($1, $2, $3)", [normalized, meta.ip ?? null, ok]);
+  if (!ok) {
+    await audit(db, user ? { id: user.id, requestId: meta.requestId } : null, "LOGIN_FAILED", "user", user?.id ?? null, {
+      after: { email: normalized, method: "google", reason: !user ? "no account" : !user.active ? "inactive" : "domain" },
+    });
+    throw forbidden("NO_ACCOUNT", "Your Google account is not set up for this tool. Ask an administrator to add you.");
+  }
+  const token = newToken();
+  const session = await one(
+    db,
+    "insert into sessions (user_id, token_hash, ip, user_agent) values ($1, $2, $3, $4) returning id, authenticated_at",
+    [user.id, sha256(token), meta.ip ?? null, meta.userAgent ?? null],
+  );
+  await audit(db, { id: user.id, requestId: meta.requestId }, "LOGIN", "user", user.id, { after: { method: "google" } });
   return { token, user: toActor(user, session, meta.requestId) };
 }
 
@@ -123,6 +153,7 @@ export async function logout(token: string | undefined | null): Promise<void> {
 
 /** FR-003: confirm the password again before a sensitive action such as bill approval. */
 export async function reauthenticate(actor: Actor, password: string): Promise<void> {
+  if (!passwordLoginEnabled()) throw forbidden("PASSWORD_LOGIN_DISABLED", "Confirm with Google instead.");
   const user = await one(db, "select password_hash from users where id = $1", [actor.id]);
   if (!(await verifyPassword(password ?? "", user?.password_hash ?? null)))
     throw new AppError(401, "INVALID_CREDENTIALS", "Password is incorrect.");
@@ -132,7 +163,9 @@ export async function reauthenticate(actor: Actor, password: string): Promise<vo
 export function requireRecentAuth(actor: Actor): void {
   const at = actor.authenticatedAt ? new Date(actor.authenticatedAt).getTime() : 0;
   if (Date.now() - at > reauthMinutes() * 60_000)
-    throw forbidden("REAUTH_REQUIRED", "Confirm your password to continue.");
+    throw new AppError(403, "REAUTH_REQUIRED", googleEnabled() && !passwordLoginEnabled() ? "Confirm with Google to continue." : "Confirm your password to continue.", {
+      method: googleEnabled() && !passwordLoginEnabled() ? "google" : "password",
+    });
 }
 
 // ------------------------------------------------------------------ users
@@ -176,9 +209,10 @@ export async function createUser(
        values ($1, $2, $3, $4, $5, $6, $6) returning ${USER_COLS}`,
       [email, normalizeEmail(email), input.name.trim(), input.role, input.canExport ?? true, actor?.id ?? null],
     );
-    const token = await issueToken(d, user.id, "INVITE", actor?.id ?? null);
     await audit(d, actor, "USER_CREATED", "user", user.id, { after: user });
-    return { user, inviteUrl: tokenUrl("INVITE", token) };
+    if (!passwordLoginEnabled()) return { user, inviteUrl: null as string | null };
+    const token = await issueToken(d, user.id, "INVITE", actor?.id ?? null);
+    return { user, inviteUrl: tokenUrl("INVITE", token) as string | null };
   });
 }
 
@@ -212,6 +246,7 @@ export async function updateUser(
 
 /** Admin issues a fresh single-use link: an invite if no password is set yet, otherwise a reset. */
 export async function issueAccessLink(actor: Actor, userId: string) {
+  if (!passwordLoginEnabled()) throw conflict("PASSWORD_LOGIN_DISABLED", "Links are not used: people sign in with Google.");
   return tx(async (d) => {
     const user = await one(d, "select id, active, password_hash from users where id = $1", [userId]);
     if (!user) throw notFound("User");
@@ -235,6 +270,7 @@ export async function describeToken(token: string) {
 
 /** Consumes an invite/reset token (single use) and sets the password. */
 export async function consumeToken(token: string, password: string, requestId?: string): Promise<void> {
+  if (!passwordLoginEnabled()) throw forbidden("PASSWORD_LOGIN_DISABLED", "Passwords are switched off. Use Sign in with Google.");
   validatePasswordStrength(password);
   const hash = await hashPassword(password);
   await tx(async (d) => {

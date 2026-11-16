@@ -67,7 +67,7 @@ describe("access control", () => {
 
   it("invites are single-use and time-limited; no plaintext password is stored", async () => {
     const { user, inviteUrl } = await createUser(w.admin, { email: "New.Person@example.test", name: "New Person", role: "INTERNAL_USER" });
-    const token = inviteUrl.split("/").pop()!;
+    const token = inviteUrl!.split("/").pop()!;
     expect(await describeToken(token)).toMatchObject({ kind: "INVITE", email: "New.Person@example.test" });
     await expectError(consumeToken(token, "short"), "WEAK_PASSWORD");
     await consumeToken(token, "a-long-enough-password");
@@ -244,11 +244,11 @@ describe("email domain restriction (ALLOWED_EMAIL_DOMAINS)", () => {
       for (const email of ["x@gmail.com", "x@vahan.co.evil.com", "x@notvahan.co", "x@sub.vahan.co", "vahan.co@evil.com"])
         await expectError(createUser(w.admin, { email, name: "X", role: "INTERNAL_USER" }), "EMAIL_DOMAIN_NOT_ALLOWED");
       const ok = await createUser(w.admin, { email: "Priya@VAHAN.co", name: "Priya", role: "INTERNAL_USER" });
-      await consumeToken(ok.inviteUrl.split("/").pop()!, "a-long-enough-password");
+      await consumeToken(ok.inviteUrl!.split("/").pop()!, "a-long-enough-password");
       expect((await login("priya@vahan.co", "a-long-enough-password", {})).user.name).toBe("Priya");
       expect((await createUser(w.admin, { email: "a@example.org", name: "A", role: "INTERNAL_USER" })).user.email).toBe("a@example.org");
       // People invited before the rule existed are shut out too.
-      await expectError(consumeToken(outsider.inviteUrl.split("/").pop()!, "a-long-enough-password"), "EMAIL_DOMAIN_NOT_ALLOWED");
+      await expectError(consumeToken(outsider.inviteUrl!.split("/").pop()!, "a-long-enough-password"), "EMAIL_DOMAIN_NOT_ALLOWED");
       await expectError(login(w.user.email, PASSWORD, {}), "INVALID_CREDENTIALS");
       expect((await call(meRoute.GET, { method: "GET", token })).status).toBe(401);
     } finally {
