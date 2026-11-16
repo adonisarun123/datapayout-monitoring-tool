@@ -234,3 +234,26 @@ describe("reports and exports", () => {
     expect(approved.after_json).toMatchObject({ status: "APPROVED", total: "703.50" });
   });
 });
+
+describe("email domain restriction (ALLOWED_EMAIL_DOMAINS)", () => {
+  it("only allowed domains can be invited, accept an invite, sign in or keep a session", async () => {
+    const outsider = await createUser(w.admin, { email: "pat@gmail.com", name: "Pat Outside", role: "INTERNAL_USER" });
+    const token = await sessionFor(w.user); // an example.test user with a live session
+    process.env.ALLOWED_EMAIL_DOMAINS = " Vahan.co , @example.org ";
+    try {
+      for (const email of ["x@gmail.com", "x@vahan.co.evil.com", "x@notvahan.co", "x@sub.vahan.co", "vahan.co@evil.com"])
+        await expectError(createUser(w.admin, { email, name: "X", role: "INTERNAL_USER" }), "EMAIL_DOMAIN_NOT_ALLOWED");
+      const ok = await createUser(w.admin, { email: "Priya@VAHAN.co", name: "Priya", role: "INTERNAL_USER" });
+      await consumeToken(ok.inviteUrl.split("/").pop()!, "a-long-enough-password");
+      expect((await login("priya@vahan.co", "a-long-enough-password", {})).user.name).toBe("Priya");
+      expect((await createUser(w.admin, { email: "a@example.org", name: "A", role: "INTERNAL_USER" })).user.email).toBe("a@example.org");
+      // People invited before the rule existed are shut out too.
+      await expectError(consumeToken(outsider.inviteUrl.split("/").pop()!, "a-long-enough-password"), "EMAIL_DOMAIN_NOT_ALLOWED");
+      await expectError(login(w.user.email, PASSWORD, {}), "INVALID_CREDENTIALS");
+      expect((await call(meRoute.GET, { method: "GET", token })).status).toBe(401);
+    } finally {
+      delete process.env.ALLOWED_EMAIL_DOMAINS;
+    }
+    expect((await call(meRoute.GET, { method: "GET", token })).status).toBe(200);
+  });
+});

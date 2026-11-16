@@ -80,7 +80,7 @@ Any Node host with a PostgreSQL database works. For Vercel with Neon:
 3. From your machine, with the same `DATABASE_URL`: `npm run migrate`, then `npm run bootstrap-admin -- you@example.com "Your Name"`.
 4. Deploy. Health check: `GET /api/v1/health`.
 
-Environment variables are listed in `.env.example`. No secret is committed to this repository.
+Set `ALLOWED_EMAIL_DOMAINS` (for example `vahan.co`) to restrict invitations and sign-in to those email domains. This checks the address on the account; it does not prove the person controls that mailbox, because the app sends no email. Environment variables are listed in `.env.example`. No secret is committed to this repository.
 
 ## Architecture
 

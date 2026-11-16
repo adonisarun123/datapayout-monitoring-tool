@@ -1,5 +1,5 @@
 import { requireUser } from "@/lib/session";
-import { listUsers } from "@/server/auth";
+import { allowedEmailDomains, listUsers } from "@/server/auth";
 import { when } from "@/lib/format";
 import { AccessDenied, Badge, PageHead } from "@/components/ui";
 import { ActionButton, ApiForm } from "@/components/client";
@@ -34,6 +34,7 @@ export default async function UsersPage() {
       </table></div>
       <div className="card">
         <h2>Invite a user</h2>
+        {allowedEmailDomains().length ? <p className="muted">Only {allowedEmailDomains().map((d) => `@${d}`).join(", ")} email addresses can be invited or sign in.</p> : null}
         <ApiForm path="/users" submitLabel="Create user and invite link" successText="User created." showResult={{ key: "inviteUrl", label: "Single-use invite link, valid for 72 hours. Send it to the user over a trusted channel; it is shown only once." }} fields={[
           { name: "name", label: "Name", required: true }, { name: "email", label: "Email", type: "email", required: true },
           { name: "role", label: "Role", type: "select", required: true, defaultValue: "INTERNAL_USER", options: [{ value: "INTERNAL_USER", label: "Internal user" }, { value: "ADMIN", label: "Admin" }] },

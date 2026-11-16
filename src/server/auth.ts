@@ -17,6 +17,18 @@ export const sessionIdleHours = () => Number(process.env.SESSION_IDLE_HOURS ?? 8
 export const reauthMinutes = () => Number(process.env.REAUTH_MINUTES ?? 15);
 
 export const normalizeEmail = (email: string) => email.trim().toLowerCase();
+
+/** ALLOWED_EMAIL_DOMAINS (comma separated, e.g. "vahan.co"). Empty means any domain. Set by deployment, not editable in the app. */
+export function allowedEmailDomains(): string[] {
+  return (process.env.ALLOWED_EMAIL_DOMAINS ?? "").split(",").map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean);
+}
+/** Exact match on the part after the single "@": sub-domains and look-alikes such as vahan.co.evil.com do not pass. */
+export function emailDomainAllowed(email: string): boolean {
+  const domains = allowedEmailDomains();
+  if (!domains.length) return true;
+  const parts = normalizeEmail(email).split("@");
+  return parts.length === 2 && parts[0].length > 0 && domains.includes(parts[1]);
+}
 const sha256 = (s: string) => crypto.createHash("sha256").update(s).digest("hex");
 const newToken = () => crypto.randomBytes(32).toString("base64url");
 
@@ -62,7 +74,7 @@ export async function login(
     throw new AppError(429, "TOO_MANY_ATTEMPTS", "Too many failed sign-in attempts. Try again in 15 minutes.");
 
   const user = await one(db, "select * from users where email_normalized = $1", [normalized]);
-  const ok = (await verifyPassword(password ?? "", user?.password_hash ?? null)) && user?.active === true;
+  const ok = (await verifyPassword(password ?? "", user?.password_hash ?? null)) && user?.active === true && emailDomainAllowed(normalized);
   await db.query("insert into login_attempts (email_normalized, ip, succeeded) values ($1, $2, $3)", [
     normalized, meta.ip ?? null, ok,
   ]);
@@ -101,7 +113,7 @@ export async function getActorFromToken(token: string | undefined | null, reques
       returning s.id as session_id, s.authenticated_at, u.*`,
     [sha256(token), String(sessionIdleHours())],
   );
-  if (!row) return null;
+  if (!row || !emailDomainAllowed(row.email)) return null;
   return toActor(row, { id: row.session_id, authenticated_at: row.authenticated_at }, requestId);
 }
 
@@ -153,6 +165,8 @@ export async function createUser(
 ) {
   const email = (input.email ?? "").trim();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw invalid("INVALID_EMAIL", "Enter a valid email address.");
+  if (!emailDomainAllowed(email))
+    throw invalid("EMAIL_DOMAIN_NOT_ALLOWED", `Only ${allowedEmailDomains().map((d) => "@" + d).join(", ")} email addresses can be given access.`);
   if (!input.name?.trim()) throw invalid("NAME_REQUIRED", "Name is required.");
   if (input.role !== "ADMIN" && input.role !== "INTERNAL_USER") throw invalid("INVALID_ROLE", "Role is invalid.");
   return tx(async (d) => {
@@ -232,6 +246,8 @@ export async function consumeToken(token: string, password: string, requestId?: 
       [sha256(token ?? "")],
     );
     if (!row) throw invalid("TOKEN_INVALID", "This link is invalid, already used or expired. Ask an admin for a new one.");
+    const owner = await one(d, "select email from users where id = $1", [row.user_id]);
+    if (!emailDomainAllowed(owner.email)) throw invalid("EMAIL_DOMAIN_NOT_ALLOWED", "This email address is not allowed to access this tool.");
     await d.query("update users set password_hash = $2, updated_at = now(), version = version + 1 where id = $1", [row.user_id, hash]);
     await d.query("update sessions set revoked_at = now() where user_id = $1 and revoked_at is null", [row.user_id]);
     await audit(d, { id: row.user_id, requestId }, row.kind === "INVITE" ? "INVITE_ACCEPTED" : "PASSWORD_RESET", "user", row.user_id);
